@@ -194,6 +194,14 @@ html, body {
     &>li:last-child {
       box-shadow: none; // otherwise it'll overflow out of the subheader
     }
+
+    .tocify-subheader {
+      // Styling for level 2 nesting
+      .tocify-item>a {
+        padding-left: $nav-padding + $nav-indent * 2;
+        font-size: 11px;
+      }
+    }
   }
 
   .toc-footer {
