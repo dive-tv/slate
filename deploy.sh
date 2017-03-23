@@ -15,14 +15,38 @@ Options:
                            deploy branch.
   -n, --no-hash            Don't append the source commit's hash to the deploy
                            commit's message.
-"
+  -c, --config-file PATH   Override default & environment variables' values
+                           with those in set in the file at 'PATH'. Must be the
+                           first option specified.
+  -k, --key-file PATH      Encrypted deploy key file. If missing key will not 
+                           be added
 
-bundle exec middleman build --clean
+Variables:
+
+  GIT_DEPLOY_DIR           Folder path containing the files to deploy.
+  GIT_DEPLOY_BRANCH        Commit deployable files to this branch.
+  GIT_DEPLOY_REPO          Push the deploy branch to this repository.
+  COMMIT_AUTHOR_USERNAME   Git push author username
+  COMMIT_AUTHOR_EMAIL      Git push author email
+  ENCRYPTION_LABEL         Travis encryption label for Github deploy key
+  
+These variables have default values defined in the script. The defaults can be
+overridden by environment variables. Any environment variables are overridden
+by values set in a '.env' file (if it exists), and in turn by those set in a
+file specified by the '--config-file' option."
+
+bundle exec middleman build --clean --verbose
 
 parse_args() {
   # Set args from a local environment file.
   if [ -e ".env" ]; then
     source .env
+  fi
+
+  # Set args from file specified on the command-line.
+  if [[ $1 = "-c" || $1 = "--config-file" ]]; then
+    source "$2"
+    shift 2
   fi
 
   # Parse arg flags
@@ -44,6 +68,10 @@ parse_args() {
     elif [[ $1 = "-n" || $1 = "--no-hash" ]]; then
       GIT_DEPLOY_APPEND_HASH=false
       shift
+    elif [[ ( $1 = "-k" || $1 = "--key-file" ) && -n $2 ]]; then
+      deploy_key_file=$2
+      echo "Using deploy key file $deploy_key_file"
+      shift 2
     else
       break
     fi
@@ -79,24 +107,24 @@ main() {
 
   commit_title=`git log -n 1 --format="%s" HEAD`
   commit_hash=` git log -n 1 --format="%H" HEAD`
-
+  
   #default commit message uses last title if a custom one is not supplied
   if [[ -z $commit_message ]]; then
     commit_message="publish: $commit_title"
   fi
-
+  
   #append hash to commit message unless no hash flag was found
   if [ $append_hash = true ]; then
     commit_message="$commit_message"$'\n\n'"generated from commit $commit_hash"
   fi
-
+    
   previous_branch=`git rev-parse --abbrev-ref HEAD`
 
   if [ ! -d "$deploy_directory" ]; then
     echo "Deploy directory '$deploy_directory' does not exist. Aborting." >&2
     return 1
   fi
-
+  
   # must use short form of flag in ls for compatibility with OS X and BSD
   if [[ -z `ls -A "$deploy_directory" 2> /dev/null` && -z $allow_empty ]]; then
     echo "Deploy directory '$deploy_directory' is empty. Aborting. If you're sure you want to deploy an empty tree, use the --allow-empty / -e flag." >&2
@@ -105,7 +133,7 @@ main() {
 
   if git ls-remote --exit-code $repo "refs/heads/$deploy_branch" ; then
     # deploy_branch exists in $repo; make sure we have the latest version
-
+    
     disable_expanded_output
     git fetch --force $repo $deploy_branch:$deploy_branch
     enable_expanded_output
@@ -148,6 +176,8 @@ incremental_deploy() {
 
 commit+push() {
   set_user_id
+  add_deploy_key
+
   git --work-tree "$deploy_directory" commit -m "$commit_message"
 
   disable_expanded_output
@@ -173,11 +203,35 @@ disable_expanded_output() {
 }
 
 set_user_id() {
-  if [[ -z `git config user.name` ]]; then
+  if [[ -n "$COMMIT_AUTHOR_USERNAME" ]]; then
+    git config user.name "$COMMIT_AUTHOR_USERNAME"
+  elif [[ -z `git config user.name` ]]; then
     git config user.name "$default_username"
   fi
-  if [[ -z `git config user.email` ]]; then
+
+  if [[ -n "$COMMIT_AUTHOR_EMAIL" ]]; then
+    git config --global user.email "$COMMIT_AUTHOR_EMAIL"
+    git config user.email "$COMMIT_AUTHOR_EMAIL"
+  elif [[ -z `git config user.email` ]]; then
     git config user.email "$default_email"
+  fi
+}
+
+# add Github's deploy key by using Travis's stored variables to decrypt key
+add_deploy_key() {
+
+  if [[ -n "${deploy_key_file}" && -n "${ENCRYPTION_LABEL}" && -e ${deploy_key_file} ]]; then
+    echo "Unencrypting key file"
+    ENCRYPTED_KEY_VAR="encrypted_${ENCRYPTION_LABEL}_key"
+    ENCRYPTED_IV_VAR="encrypted_${ENCRYPTION_LABEL}_iv"
+    ENCRYPTED_KEY=${!ENCRYPTED_KEY_VAR}
+    ENCRYPTED_IV=${!ENCRYPTED_IV_VAR}
+    openssl aes-256-cbc -K $ENCRYPTED_KEY -iv $ENCRYPTED_IV -in ${deploy_key_file} -out deploy_key -d
+    chmod 600 deploy_key
+    eval `ssh-agent -s`
+    ssh-add deploy_key
+  else
+    echo "NO key file"
   fi
 }
 
@@ -188,7 +242,7 @@ restore_head() {
   else
     git symbolic-ref HEAD refs/heads/$previous_branch
   fi
-
+  
   git reset --mixed
 }
 
