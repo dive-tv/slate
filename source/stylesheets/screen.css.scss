@@ -535,9 +535,10 @@ html, body {
 
     padding: 2em $main-padding;
     margin: 0;
-    width: $examples-width;
+    //width: $examples-width;
+    width: 60%;
 
-    float:right;
+    //float:right;
     clear:right;
 
     box-sizing: border-box;
